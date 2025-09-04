@@ -7,8 +7,7 @@ type CreateRoomRequest struct {
 }
 
 type JoinRoomRequest struct {
-	UserId string `json:"user_id"`
+	UserID string `json:"user_id"`
+	RoomID string `json:"room_id"`
 	Role   string `json:"role"`
-	Name   string `json:"name"`
-	URL    string `json:"url"`
 }
