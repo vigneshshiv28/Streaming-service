@@ -1,6 +1,7 @@
 package streaming
 
 import (
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -11,9 +12,9 @@ type Connection interface {
 }
 
 type Participant struct {
-	ID string
-	//Name     string
-	//Role     string
+	ID       string
+	Name     string
+	Role     string
 	Conn     Connection
 	RoomId   string
 	JoinedAt time.Time
@@ -69,6 +70,22 @@ func (rm *RoomManager) DeleteRoom(roomID string) {
 		}
 		delete(rm.Rooms, roomID)
 	}
+}
+
+func (rm *RoomManager) GenerateRoomID(n int) string {
+	seed := time.Now().UTC().UnixNano()
+	source := rand.NewSource(seed)
+	rand.New(source)
+
+	letters := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	b := make([]rune, 8)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))]
+	}
+
+	roomID := string(b)
+
+	return roomID
 }
 
 func (r *Room) AddParticipant(p *Participant) {
