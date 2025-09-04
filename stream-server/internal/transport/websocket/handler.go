@@ -1,0 +1,60 @@
+package websocket
+
+import (
+	"log"
+	"net/http"
+	. "stream-server/internal/streaming"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+func HandleWebSocket(rm *RoomManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		roomID := r.URL.Query().Get("roomID")
+		userID := r.URL.Query().Get("userID")
+
+		if roomID == "" || userID == "" {
+			http.Error(w, "Missing roomID or userID", http.StatusBadRequest)
+
+			return
+		}
+
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Println("Fail to upgrade to WS")
+		}
+
+		wsConnection := NewWSConnection(conn)
+
+		p := &Participant{
+			ID:       userID,
+			Conn:     wsConnection,
+			RoomId:   roomID,
+			JoinedAt: time.Now(),
+		}
+
+		room, ok := rm.GetRoom(roomID)
+		if !ok {
+			rm.CreateRoom(roomID)
+		}
+
+		room.AddParticipant(p)
+		defer func() {
+			room.RemoveParticipant(p)
+			wsConnection.Close()
+		}()
+
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				log.Println("Error reading message:", err)
+			}
+			room.Broadcast(p.ID, msg)
+		}
+	}
+}

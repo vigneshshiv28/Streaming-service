@@ -3,15 +3,18 @@ package streaming
 import (
 	"sync"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
+type Connection interface {
+	Send([]byte) error
+	Close()
+}
+
 type Participant struct {
-	ID       string
-	Name     string
-	Role     string
-	Conn     websocket.Conn
+	ID string
+	//Name     string
+	//Role     string
+	Conn     Connection
 	RoomId   string
 	JoinedAt time.Time
 }
@@ -46,8 +49,8 @@ func (rm *RoomManager) CreateRoom(roomID string) *Room {
 }
 
 func (rm *RoomManager) GetRoom(roomID string) (*Room, bool) {
-	rm.mu.Lock()
-	defer rm.mu.Unlock()
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
 
 	if room, ok := rm.Rooms[roomID]; ok {
 		return room, true
@@ -75,9 +78,20 @@ func (r *Room) AddParticipant(p *Participant) {
 	r.Participants[p.ID] = p
 }
 
-func (r *Room) DeleteRoom(p *Participant) {
+func (r *Room) RemoveParticipant(p *Participant) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	delete(r.Participants, p.ID)
+}
+
+func (r *Room) Broadcast(senderID string, message []byte) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for id, p := range r.Participants {
+		if id != senderID {
+			p.Conn.Send(message)
+		}
+	}
 }
