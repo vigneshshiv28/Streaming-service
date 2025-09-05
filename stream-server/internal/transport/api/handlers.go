@@ -14,24 +14,29 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 			return
 		}
 
+		if req.UserId == "" || req.Name == "" || req.Role == "" {
+			http.Error(w, "Missing required fields", http.StatusBadRequest)
+			return
+		}
+
 		var roomID string
 		for {
 			roomID = rm.GenerateRoomID(8)
 
-			if _, exists := rm.Rooms[roomID]; !exists {
+			if _, exists := rm.CreateRoom(roomID); !exists {
 				break
 			}
 		}
 
-		rm.CreateRoom(roomID)
+		room, _ := rm.GetRoom(roomID)
 
-		scheme := "http"
+		httpScheme := "http"
 		if r.TLS != nil {
-			scheme = "https"
+			httpScheme = "https"
 		}
 
-		guestURL := scheme + "://" + r.Host + "/join/" + roomID + "?role=guest"
-		audienceURL := scheme + "://" + r.Host + "/join/" + roomID + "?role=audience"
+		guestURL := httpScheme + "://" + r.Host + "/join/" + room.ID + "?role=guest"
+		audienceURL := httpScheme + "://" + r.Host + "/join/" + room.ID + "?role=audience"
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(CreateRoomResponse{
@@ -54,6 +59,15 @@ func JoinRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 			return
 		}
 
+		if req.UserID == "" || req.RoomID == "" || req.Role == "" {
+			http.Error(w, "Missing required fields", http.StatusBadRequest)
+			return
+		}
+
+		if req.Role != "host" && req.Role != "guest" && req.Role != "audience" {
+			http.Error(w, "Invalid Request", http.StatusBadRequest)
+		}
+
 		userID := req.UserID
 		roomID := req.RoomID
 		role := req.Role
@@ -64,12 +78,31 @@ func JoinRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 			return
 		}
 
-		scheme := "ws"
-		if r.TLS != nil {
-			scheme = "wss"
+		switch role {
+		case "host":
+			if len(room.Participants) > 0 {
+				http.Error(w, "Host already exists", http.StatusForbidden)
+				return
+			}
+		case "guest":
+			if len(room.Participants) >= 2 {
+				http.Error(w, "Room is full", http.StatusForbidden)
+				return
+			}
+		case "audience":
+
+		default:
+			http.Error(w, "Invalid role", http.StatusBadRequest)
+			return
+
 		}
 
-		wsURL := scheme + "://" + r.Host + "/ws?room_id=" + room.ID + "&user_id=" + userID + "&role=" + role
+		wsScheme := "ws"
+		if r.TLS != nil {
+			wsScheme = "wss"
+		}
+
+		wsURL := wsScheme + "://" + r.Host + "/ws?room_id=" + room.ID + "&user_id=" + userID + "&role=" + role
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(JoinRoomResponse{

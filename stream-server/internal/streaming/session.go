@@ -17,6 +17,7 @@ type Participant struct {
 	Role     string
 	Conn     Connection
 	RoomId   string
+	Status   string
 	JoinedAt time.Time
 }
 
@@ -32,12 +33,12 @@ type RoomManager struct {
 	mu    sync.RWMutex
 }
 
-func (rm *RoomManager) CreateRoom(roomID string) *Room {
+func (rm *RoomManager) CreateRoom(roomID string) (*Room, bool) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	if room, ok := rm.Rooms[roomID]; ok {
-		return room
+		return room, true
 	}
 
 	room := &Room{
@@ -46,7 +47,7 @@ func (rm *RoomManager) CreateRoom(roomID string) *Room {
 		CreatedAt:    time.Now(),
 	}
 
-	return room
+	return room, false
 }
 
 func (rm *RoomManager) GetRoom(roomID string) (*Room, bool) {

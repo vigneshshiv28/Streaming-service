@@ -17,16 +17,18 @@ func HandleWebSocket(rm *RoomManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		roomID := r.URL.Query().Get("roomID")
 		userID := r.URL.Query().Get("userID")
+		role := r.URL.Query().Get("role")
 
-		if roomID == "" || userID == "" {
+		if roomID == "" || userID == "" || role == "" {
 			http.Error(w, "Missing roomID or userID", http.StatusBadRequest)
-
 			return
 		}
 
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Println("Fail to upgrade to WS")
+			http.Error(w, "Something Went Wrong", http.StatusInternalServerError)
+			return
 		}
 
 		wsConnection := NewWSConnection(conn)
@@ -34,7 +36,9 @@ func HandleWebSocket(rm *RoomManager) http.HandlerFunc {
 		p := &Participant{
 			ID:       userID,
 			Conn:     wsConnection,
+			Role:     role,
 			RoomId:   roomID,
+			Status:   "active",
 			JoinedAt: time.Now(),
 		}
 
