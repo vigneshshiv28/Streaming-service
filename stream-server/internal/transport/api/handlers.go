@@ -46,7 +46,7 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 			RoomID:      roomID,
 			GuestURL:    guestURL,
 			AudienceURL: audienceURL,
-			CreatedAt:   rm.Rooms[roomID].CreatedAt.Format(`2025-09-05 18:54:00`),
+			CreatedAt:   rm.Rooms[roomID].CreatedAt.Format(`2006-01-02 15:04:05`),
 		})
 	}
 }

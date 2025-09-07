@@ -31,6 +31,12 @@ func HandleWebSocket(rm *RoomManager) http.HandlerFunc {
 			return
 		}
 
+		room, ok := rm.GetRoom(roomID)
+		if !ok {
+			http.Error(w, "Room does not exist", http.StatusBadRequest)
+			return
+		}
+
 		wsConnection := NewWSConnection(conn)
 
 		p := &Participant{
@@ -39,12 +45,8 @@ func HandleWebSocket(rm *RoomManager) http.HandlerFunc {
 			Role:     role,
 			RoomId:   roomID,
 			Status:   "active",
+			SendChan: make(chan Message, 256),
 			JoinedAt: time.Now(),
-		}
-
-		room, ok := rm.GetRoom(roomID)
-		if !ok {
-			rm.CreateRoom(roomID)
 		}
 
 		room.AddParticipant(p)
@@ -53,12 +55,5 @@ func HandleWebSocket(rm *RoomManager) http.HandlerFunc {
 			wsConnection.Close()
 		}()
 
-		for {
-			_, msg, err := conn.ReadMessage()
-			if err != nil {
-				log.Println("Error reading message:", err)
-			}
-			room.Broadcast(p.ID, msg)
-		}
 	}
 }

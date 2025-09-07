@@ -27,3 +27,13 @@ func (w *WSConnection) Close() {
 	defer w.mu.Unlock()
 	_ = w.conn.Close()
 }
+
+func (w *WSConnection) Read() ([]byte, error) {
+
+	_, msg, error := w.conn.ReadMessage()
+
+	if error != nil {
+		return nil, error
+	}
+	return msg, nil
+}
