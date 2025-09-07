@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	. "stream-server/internal/streaming"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -54,6 +55,21 @@ func HandleWebSocket(rm *RoomManager) http.HandlerFunc {
 			room.RemoveParticipant(p)
 			wsConnection.Close()
 		}()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			p.WritePump()
+		}()
+
+		go func() {
+			defer wg.Done()
+			p.ReadPump(room)
+		}()
+
+		wg.Wait()
 
 	}
 }

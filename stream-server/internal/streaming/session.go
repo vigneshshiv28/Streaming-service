@@ -125,15 +125,24 @@ func (p *Participant) ReadPump(r *Room) {
 	}()
 
 	for {
-		msgBytes, error := p.Conn.Read()
-		if error != nil {
-			fmt.Printf("Fail to read the message")
+		msgBytes, err := p.Conn.Read()
+		if err != nil {
+			log.Printf("Closing connection for %s: %v:%s", p.ID, err, string(msgBytes))
+			return
 		}
+		log.Printf("Received raw: %s", string(msgBytes))
 
 		var msg Message
-
 		if err := json.Unmarshal(msgBytes, &msg); err != nil {
-			fmt.Printf("Invalid Message %s", msg)
+			log.Printf("Invalid JSON from %s: %v | raw=%s", p.ID, err, string(msgBytes))
+			p.Conn.Send([]byte(`{"type":"error","message":"Invalid JSON"}`))
+			continue
+		}
+
+		if msg.Type == "" {
+			log.Printf("Missing message type from %s: %s", p.ID, string(msgBytes))
+			p.Conn.Send([]byte(`{"type":"error","message":"Missing message type"}`))
+			continue
 		}
 
 		switch msg.Type {
@@ -170,6 +179,9 @@ func (p *Participant) ReadPump(r *Room) {
 			if err := r.SendTo(p.ID, receiverID, msg); err != nil {
 				fmt.Printf("Fail to send the message to %s", receiverID)
 			}
+		default:
+			log.Printf("Unknown message type from %s: %s", p.ID, msg.Type)
+			p.Conn.Send([]byte(`{"type":"error","message":"Unknown message type"}`))
 		}
 
 	}

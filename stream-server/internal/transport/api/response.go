@@ -5,6 +5,7 @@ type CreateRoomResponse struct {
 	Name        string `json:"name"`
 	Role        string `json:"role"`
 	RoomID      string `json:"roomID"`
+	HostURL     string `json:"hostURL"`
 	GuestURL    string `json:"joiningURL"`
 	AudienceURL string `json:"audienceURL"`
 	CreatedAt   string `json:"createdAt"`

@@ -37,6 +37,7 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 
 		guestURL := httpScheme + "://" + r.Host + "/join/" + room.ID + "?role=guest"
 		audienceURL := httpScheme + "://" + r.Host + "/join/" + room.ID + "?role=audience"
+		hostURL := httpScheme + "://" + r.Host + "/join/" + room.ID + "?role=host"
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(CreateRoomResponse{
@@ -44,6 +45,7 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 			Name:        req.Name,
 			Role:        req.Role,
 			RoomID:      roomID,
+			HostURL:     hostURL,
 			GuestURL:    guestURL,
 			AudienceURL: audienceURL,
 			CreatedAt:   rm.Rooms[roomID].CreatedAt.Format(`2006-01-02 15:04:05`),
