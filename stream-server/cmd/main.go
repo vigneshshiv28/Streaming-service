@@ -1,35 +1,45 @@
 package main
 
 import (
-	"log"
-	"net/http"
+	"context"
+	"os"
+	"os/signal"
+	"stream-server/internal/logger"
+	"stream-server/internal/server"
 	"stream-server/internal/streaming"
-	api "stream-server/internal/transport/api"
-	ws "stream-server/internal/transport/websocket"
+	"time"
 )
 
 func main() {
+
 	rm := &streaming.RoomManager{Rooms: make(map[string]*streaming.Room)}
 
-	withCORS := func(h http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*") // allow all (dev only!)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 
-			// Handle preflight
-			if r.Method == http.MethodOptions {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
+	log, ctx := logger.InitLogger("panic", ctx)
+	serv := server.NewServer(log, rm)
 
-			h.ServeHTTP(w, r)
+	serv.SetupServer("8000")
+
+	serv.RegisterRoutes()
+
+	go func() {
+		if err := serv.StartServer(); err != nil {
+			log.Fatal().Err(err).Msg("fail to start the server")
 		}
+	}()
+
+	<-ctx.Done()
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+
+	if err := serv.StopServer(ctx); err != nil {
+		log.Fatal().Err(err).Msg("server force to shutdown")
 	}
 
-	http.HandleFunc("/create-room", withCORS(api.CreateRoomHandler(rm)))
-	http.HandleFunc("/join-room", withCORS(api.JoinRoomHandler(rm)))
-	http.HandleFunc("/ws", withCORS(ws.HandleWebSocket(rm)))
-	log.Println("Listening at port 8000")
-	http.ListenAndServe(":8000", nil)
+	stop()
+	cancel()
+
+	log.Info().Msg("server excited gracefully")
+
 }

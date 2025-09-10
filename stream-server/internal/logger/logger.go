@@ -13,7 +13,7 @@ type contextKey string
 
 const LoggerKey contextKey = "logger"
 
-func NewLogger(logLevel string) *zerolog.Logger {
+func newLogger(logLevel string) *zerolog.Logger {
 
 	level, err := zerolog.ParseLevel(logLevel)
 	if err != nil {
@@ -68,7 +68,7 @@ func NewLogger(logLevel string) *zerolog.Logger {
 }
 
 func InitLogger(logLevel string, ctx context.Context) (*zerolog.Logger, context.Context) {
-	logger := NewLogger(logLevel)
+	logger := newLogger(logLevel)
 	ctx = context.WithValue(ctx, LoggerKey, logger)
 
 	return logger, ctx

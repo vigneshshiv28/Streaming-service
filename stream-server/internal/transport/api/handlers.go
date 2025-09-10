@@ -28,7 +28,12 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 			}
 		}
 
-		room, _ := rm.GetRoom(roomID)
+		room, exist := rm.GetRoom(roomID)
+
+		if !exist {
+			http.Error(w, "Fail to create room", http.StatusInternalServerError)
+			return
+		}
 
 		httpScheme := "http"
 		if r.TLS != nil {
@@ -94,7 +99,7 @@ func JoinRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 		case "audience":
 
 		default:
-			http.Error(w, "Invalid role", http.StatusBadRequest)
+			http.Error(w, "Invalid Request", http.StatusBadRequest)
 			return
 
 		}
