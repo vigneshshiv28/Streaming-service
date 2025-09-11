@@ -9,27 +9,13 @@ import (
 func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req CreateRoomRequest
-
-		logger := rm.GetLogger()
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			logger.Warn().
-				Err(err).
-				Str("remote_addr", r.RemoteAddr).
-				Str("method", r.Method).
-				Str("path", r.URL.Path).
-				Msg("failed to decode JSON request body")
 			http.Error(w, "Invalid request", http.StatusBadRequest)
 			return
 		}
 
 		if req.UserId == "" || req.Name == "" || req.Role == "" {
-			logger.Warn().
-				Str("user_id", req.UserId).
-				Str("name", req.Name).
-				Str("role", req.Role).
-				Str("remote_addr", r.RemoteAddr).
-				Msg("create room request missing required fields")
-			http.Error(w, "Missing required fields: userId, name, and role", http.StatusBadRequest)
+			http.Error(w, "Missing required fields", http.StatusBadRequest)
 			return
 		}
 
@@ -45,27 +31,9 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 		room, exist := rm.GetRoom(roomID)
 
 		if !exist {
-
-			logger.Error().
-				Str("room_id", roomID).
-				Str("remote_addr", r.RemoteAddr).
-				Str("method", r.Method).
-				Str("path", r.URL.Path).
-				Msg("failed to retrieve newly created room")
 			http.Error(w, "Fail to create room", http.StatusInternalServerError)
 			return
 		}
-		logger.Info().
-			Str("room_id", roomID).
-			Str("remote_addr", r.RemoteAddr).
-			Str("method", r.Method).
-			Str("path", r.URL.Path).
-			Str("creator_user_id", req.UserId).
-			Str("creator_name", req.Name).
-			Str("creator_role", req.Role).
-			Time("created_at", rm.Rooms[roomID].CreatedAt).
-			Int("http_status", http.StatusOK).
-			Msg("room creation request succeeded")
 
 		httpScheme := "http"
 		if r.TLS != nil {
@@ -92,38 +60,19 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 
 func JoinRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		logger := rm.GetLogger()
-
 		var req JoinRoomRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			logger.Warn().
-				Err(err).
-				Str("remote_addr", r.RemoteAddr).
-				Str("method", r.Method).
-				Str("path", r.URL.Path).
-				Msg("failed to decode join room request body")
-			http.Error(w, "Invalid request", http.StatusBadRequest)
+			http.Error(w, "Invaild request", http.StatusBadRequest)
 			return
 		}
 
 		if req.UserID == "" || req.RoomID == "" || req.Role == "" {
-			logger.Warn().
-				Str("remote_addr", r.RemoteAddr).
-				Str("method", r.Method).
-				Str("path", r.URL.Path).
-				Msg("missing required fields in join room request")
 			http.Error(w, "Missing required fields", http.StatusBadRequest)
 			return
 		}
 
 		if req.Role != "host" && req.Role != "guest" && req.Role != "audience" {
-			logger.Warn().
-				Str("user_id", req.UserID).
-				Str("room_id", req.RoomID).
-				Str("role", req.Role).
-				Msg("invalid role in join room request")
-			http.Error(w, "Invalid role", http.StatusBadRequest)
-			return
+			http.Error(w, "Invalid Request", http.StatusBadRequest)
 		}
 
 		userID := req.UserID
@@ -132,10 +81,6 @@ func JoinRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 
 		room, ok := rm.GetRoom(roomID)
 		if !ok {
-			logger.Warn().
-				Str("user_id", userID).
-				Str("room_id", roomID).
-				Msg("attempt to join non-existent room")
 			http.Error(w, "Room does not exist", http.StatusBadRequest)
 			return
 		}
@@ -143,23 +88,19 @@ func JoinRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 		switch role {
 		case "host":
 			if len(room.Participants) > 0 {
-				logger.Warn().
-					Str("room_id", roomID).
-					Str("user_id", userID).
-					Msg("host already exists in room")
 				http.Error(w, "Host already exists", http.StatusForbidden)
 				return
 			}
 		case "guest":
 			if len(room.Participants) >= 2 {
-				logger.Warn().
-					Str("room_id", roomID).
-					Str("user_id", userID).
-					Msg("room is full for guests")
 				http.Error(w, "Room is full", http.StatusForbidden)
 				return
 			}
 		case "audience":
+
+		default:
+			http.Error(w, "Invalid Request", http.StatusBadRequest)
+			return
 
 		}
 
@@ -168,19 +109,7 @@ func JoinRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 			wsScheme = "wss"
 		}
 
-		wsURL := wsScheme + "://" + r.Host + "/rooms" + "/" + roomID +
-			"/ws?user_id=" + userID +
-			"&role=" + role
-
-		logger.Info().
-			Str("room_id", roomID).
-			Str("user_id", userID).
-			Str("role", role).
-			Str("remote_addr", r.RemoteAddr).
-			Str("method", r.Method).
-			Str("path", r.URL.Path).
-			Int("http_status", http.StatusOK).
-			Msg("room join request succeeded")
+		wsURL := wsScheme + "://" + r.Host + "/ws?room_id=" + room.ID + "&user_id=" + userID + "&role=" + role
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(JoinRoomResponse{
@@ -190,5 +119,6 @@ func JoinRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 			RoomID: roomID,
 			WSURL:  wsURL,
 		})
+
 	}
 }

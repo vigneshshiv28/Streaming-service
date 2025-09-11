@@ -36,7 +36,7 @@ func (s *Server) StartServer() error {
 		return errors.New("http server is not intialized")
 	}
 
-	s.logger.Info().Str("port", s.httpServer.Addr).Msg("started HTTP server")
+	s.logger.Info().Str("port", s.httpServer.Addr).Msg("starting HTTP server")
 
 	return s.httpServer.ListenAndServe()
 }

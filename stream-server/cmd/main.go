@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
-	"net/http"
 	"os"
 	"os/signal"
 	"stream-server/internal/logger"
@@ -14,11 +12,11 @@ import (
 
 func main() {
 
+	rm := &streaming.RoomManager{Rooms: make(map[string]*streaming.Room)}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 
-	log, ctx := logger.InitLogger("debug", ctx)
-
-	rm := streaming.NewRoomManager(log)
+	log, ctx := logger.InitLogger("panic", ctx)
 	serv := server.NewServer(log, rm)
 
 	serv.SetupServer("8000")
@@ -26,7 +24,7 @@ func main() {
 	serv.RegisterRoutes()
 
 	go func() {
-		if err := serv.StartServer(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := serv.StartServer(); err != nil {
 			log.Fatal().Err(err).Msg("fail to start the server")
 		}
 	}()

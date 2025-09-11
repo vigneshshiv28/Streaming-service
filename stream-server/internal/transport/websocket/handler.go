@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 )
 
@@ -16,7 +15,7 @@ var upgrader = websocket.Upgrader{
 
 func HandleWebSocket(rm *RoomManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		roomID := chi.URLParam(r, "roomID")
+		roomID := r.URL.Query().Get("roomID")
 		userID := r.URL.Query().Get("userID")
 		role := r.URL.Query().Get("role")
 
@@ -31,20 +30,6 @@ func HandleWebSocket(rm *RoomManager) http.HandlerFunc {
 				Msg("WebSocket connection attempt with missing parameters")
 			http.Error(w, "Missing roomID or userID", http.StatusBadRequest)
 			return
-		}
-
-		room, ok := rm.GetRoom(roomID)
-
-		if _, exists := room.Participants[userID]; exists {
-			logger.Warn().
-				Str("room_id", roomID).
-				Str("user_id", userID).
-				Str("role", role).
-				Str("remote_addr", r.RemoteAddr).
-				Msg("User already have joined the room")
-			http.Error(w, "User already have joined the room", http.StatusBadRequest)
-			return
-
 		}
 
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -66,6 +51,7 @@ func HandleWebSocket(rm *RoomManager) http.HandlerFunc {
 			Str("remote_addr", r.RemoteAddr).
 			Msg("WebSocket connection upgraded successfully")
 
+		room, ok := rm.GetRoom(roomID)
 		if !ok {
 			logger.Warn().
 				Str("room_id", roomID).
