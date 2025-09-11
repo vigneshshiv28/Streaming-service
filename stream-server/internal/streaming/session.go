@@ -170,17 +170,18 @@ func (r *Room) AddParticipant(p *Participant, logger *zerolog.Logger) error {
 	participantCount := len(r.Participants)
 
 	logger.Info().Str("room_id", r.ID).Str("participant_id", p.ID).Int("participant_count", participantCount).Msg("participant added to room")
+	/*
+		if participantCount > 1 {
+			joinMsg := Message{
+				Type:    "participant_joined",
+				From:    p.ID,
+				Action:  "join",
+				Content: fmt.Sprintf(`{"participant_count":%d,"participant_id":"%s","participant_name":"%s"}`, participantCount, p.ID, p.Name),
+			}
+			r.Broadcast(p.ID, joinMsg, logger)
 
-	if participantCount > 1 {
-		joinMsg := Message{
-			Type:    "participant_joined",
-			From:    p.ID,
-			Action:  "join",
-			Content: fmt.Sprintf(`{"participant_count":%d,"participant_id":"%s","participant_name":"%s"}`, participantCount, p.ID, p.Name),
-		}
-		r.Broadcast(p.ID, joinMsg, logger)
-		logger.Info().Str("room_id", r.ID).Str("participant_id", p.ID).Int("participant_count", participantCount).Msg("notified existing participants of new join")
-	}
+		}*/
+	logger.Info().Str("room_id", r.ID).Str("participant_id", p.ID).Int("participant_count", participantCount).Msg("notified existing participants of new join")
 
 	return nil
 }
@@ -355,6 +356,10 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 			default:
 				logger.Warn().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("failed to send participant list, channel full")
 			}
+		case "join":
+			r.Broadcast(p.ID, msg, logger)
+			logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("chat message broadcasted")
+
 		default:
 			logger.Warn().Str("room_id", r.ID).Str("participant_id", p.ID).Str("type", msg.Type).Msg("unknown message type")
 			p.Conn.Send([]byte(`{"type":"error","message":"Unknown message type"}`))
