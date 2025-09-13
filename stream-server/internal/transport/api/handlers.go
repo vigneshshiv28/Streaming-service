@@ -14,7 +14,7 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 			return
 		}
 
-		if req.UserId == "" || req.Name == "" || req.Role == "" {
+		if req.UserId == "" || req.Name == "" {
 			http.Error(w, "Missing required fields", http.StatusBadRequest)
 			return
 		}
@@ -48,7 +48,7 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 		json.NewEncoder(w).Encode(CreateRoomResponse{
 			UserID:      req.UserId,
 			Name:        req.Name,
-			Role:        req.Role,
+			Role:        "host",
 			RoomID:      roomID,
 			HostURL:     hostURL,
 			GuestURL:    guestURL,
