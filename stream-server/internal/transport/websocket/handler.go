@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"net/http"
+	"stream-server/internal/core"
 	. "stream-server/internal/streaming"
 	"sync"
 	"time"
@@ -81,9 +82,9 @@ func HandleWebSocket(rm *RoomManager) http.HandlerFunc {
 			ID:       userID,
 			Conn:     wsConnection,
 			Role:     role,
-			RoomId:   roomID,
+			Room:     room,
 			Status:   "active",
-			SendChan: make(chan Message, 256),
+			SendChan: make(chan core.Message, 256),
 			JoinedAt: time.Now(),
 		}
 

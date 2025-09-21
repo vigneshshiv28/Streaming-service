@@ -7,35 +7,22 @@ import (
 	"sync"
 	"time"
 
+	"stream-server/internal/core"
+	"stream-server/internal/rtc"
+
+	"github.com/pion/webrtc/v4"
 	"github.com/rs/zerolog"
 )
-
-type Connection interface {
-	Send([]byte) error
-	Close()
-	Read() ([]byte, error)
-}
-
-type Message struct {
-	Type    string      `json:"type"`
-	From    string      `json:"from,omitempty"`
-	To      string      `json:"to,omitempty"`
-	Role    string      `json:"role,omitempty"`
-	Name    string      `json:"name,omitempty"`
-	Content string      `json:"content,omitempty"`
-	SDP     interface{} `json:"sdp,omitempty"`
-	ICE     interface{} `json:"ice,omitempty"`
-	Action  string      `json:"action,omitempty"`
-}
 
 type Participant struct {
 	ID       string
 	Name     string
 	Role     string
-	Conn     Connection
-	RoomId   string
+	Conn     core.Connection
+	rtcConn  core.RTCConnection
+	Room     *Room
 	Status   string
-	SendChan chan Message
+	SendChan chan core.Message
 	JoinedAt time.Time
 }
 
@@ -204,7 +191,7 @@ func (r *Room) RemoveParticipant(p *Participant, logger *zerolog.Logger) {
 	p.Conn.Close()
 	close(p.SendChan)
 	if !isEmpty {
-		leaveMsg := Message{
+		leaveMsg := core.Message{
 			Type:    "participant_left",
 			From:    p.ID,
 			Action:  "leave",
@@ -217,7 +204,7 @@ func (r *Room) RemoveParticipant(p *Participant, logger *zerolog.Logger) {
 	logger.Info().Str("room_id", r.ID).Str("participant_id", p.ID).Int("participant_count", participantCount).Bool("room_empty", isEmpty).Msg("participant removed from room")
 }
 
-func (r *Room) Broadcast(senderID string, message Message, logger *zerolog.Logger) {
+func (r *Room) Broadcast(senderID string, message core.Message, logger *zerolog.Logger) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -233,7 +220,29 @@ func (r *Room) Broadcast(senderID string, message Message, logger *zerolog.Logge
 	}
 }
 
-func (r *Room) SendTo(senderID string, receiverID string, message Message, logger *zerolog.Logger) error {
+func (r *Room) SendBack(senderID string, message core.Message, logger *zerolog.Logger) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	p, ok := r.Participants[senderID]
+
+	if !ok {
+		logger.Warn().Str("room_id", r.ID).Str("sender_id", senderID).Msg("sender not found in room")
+		return fmt.Errorf("")
+	}
+
+	select {
+	case p.SendChan <- message:
+		logger.Debug().Str("room_id", r.ID).Str("sender_id", senderID).Str("message_type", message.Type).Msg("message sent to participant")
+		return nil
+	default:
+		logger.Warn().Str("room_id", r.ID).Str("sender_id", senderID).Msg("failed to send message, channel full")
+		return fmt.Errorf("not able to send the message to %s", senderID)
+
+	}
+}
+
+func (r *Room) SendTo(senderID string, receiverID string, message core.Message, logger *zerolog.Logger) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -305,7 +314,7 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 
 		logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).RawJSON("raw_message", msgBytes).Msg("received message")
 
-		var msg Message
+		var msg core.Message
 		if err := json.Unmarshal(msgBytes, &msg); err != nil {
 			logger.Warn().Str("room_id", r.ID).Str("participant_id", p.ID).Err(err).Msg("invalid JSON")
 			p.Conn.Send([]byte(`{"type":"error","message":"invalid JSON"}`))
@@ -321,30 +330,67 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 		logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Str("message_type", msg.Type).Msg("processing message")
 
 		switch msg.Type {
+
 		case "chat":
 			r.Broadcast(p.ID, msg, logger)
 			logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("chat message broadcasted")
+
 		case "sdp":
-			receiverID := msg.To
-			if receiverID == "" {
-				logger.Warn().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("missing receiver ID in SDP")
-				continue
+			sdp := msg.SDP.(webrtc.SessionDescription)
+
+			if sdp.Type == webrtc.SDPTypeOffer {
+				var err error
+				p.rtcConn, err = rtc.NewPionRTCConnection(p, logger)
+
+				if err != nil {
+					logger.Error().Err(err).Msg("unable to create peer connection")
+
+					errMsg := core.Message{
+						Type:    "error",
+						To:      p.ID,
+						Content: fmt.Sprintf("Failed to handle SDP offer: %v", err),
+					}
+
+					p.Room.SendBack(p.ID, errMsg, logger)
+					continue
+
+				}
+
+				answer, err := p.rtcConn.HandleSDPOffer(sdp, logger)
+				if err != nil {
+					logger.Error().Str("room_id", r.ID).Str("participant_id", p.ID).Err(err).Msg("unable to handle sdp offer")
+
+					errMsg := core.Message{
+						Type:    "error",
+						To:      p.ID,
+						Content: fmt.Sprintf("Failed to handle SDP offer: %v", err),
+					}
+
+					p.Room.SendBack(p.ID, errMsg, logger)
+					continue
+
+				}
+
+				responseMsg := core.Message{
+					Type: "sdp",
+					SDP:  answer,
+				}
+
+				p.Room.SendBack(p.ID, responseMsg, logger)
+				logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("sdp answer send to the user")
 			}
-			if err := r.SendTo(p.ID, receiverID, msg, logger); err != nil {
-				logger.Warn().Str("room_id", r.ID).Str("sender_id", p.ID).Str("receiver_id", receiverID).Err(err).Msg("failed to forward SDP")
-			}
+
 		case "ice":
-			receiverID := msg.To
-			if receiverID == "" {
-				logger.Warn().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("missing receiver ID in ICE")
-				continue
+			ice := msg.ICE.(webrtc.ICECandidateInit)
+			err := p.rtcConn.HandleICE(ice, logger)
+
+			if err != nil {
+				logger.Error().Str("room_id", r.ID).Str("participant_id", p.ID).Err(err).Msg("unable to add ICE candiate")
 			}
-			if err := r.SendTo(p.ID, receiverID, msg, logger); err != nil {
-				logger.Warn().Str("room_id", r.ID).Str("sender_id", p.ID).Str("receiver_id", receiverID).Err(err).Msg("failed to forward ICE")
-			}
+
 		case "get_participants":
 			participantList := r.GetParticipantList()
-			responseMsg := Message{
+			responseMsg := core.Message{
 				Type:    "participant_list",
 				Content: participantList,
 			}
@@ -354,6 +400,7 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 			default:
 				logger.Warn().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("failed to send participant list, channel full")
 			}
+
 		case "join":
 			r.Broadcast(p.ID, msg, logger)
 			logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("joining message broadcasted")
@@ -369,15 +416,30 @@ func (p *Participant) WritePump(logger *zerolog.Logger) {
 	for msg := range p.SendChan {
 		data, err := json.Marshal(msg)
 		if err != nil {
-			logger.Error().Str("room_id", p.RoomId).Str("participant_id", p.ID).Err(err).Msg("failed to marshal outgoing message")
+			logger.Error().Str("room_id", p.Room.ID).Str("participant_id", p.ID).Err(err).Msg("failed to marshal outgoing message")
 			continue
 		}
 
 		if err := p.Conn.Send(data); err != nil {
-			logger.Warn().Str("room_id", p.RoomId).Str("participant_id", p.ID).Err(err).Msg("failed to send message")
+			logger.Warn().Str("room_id", p.Room.ID).Str("participant_id", p.ID).Err(err).Msg("failed to send message")
 			return
 		}
 
-		logger.Debug().Str("room_id", p.RoomId).Str("participant_id", p.ID).Str("message_type", msg.Type).Msg("message sent to participant")
+		logger.Debug().Str("room_id", p.Room.ID).Str("participant_id", p.ID).Str("message_type", msg.Type).Msg("message sent to participant")
 	}
+}
+
+func (p *Participant) OnICECandidate(candidate *webrtc.ICECandidate, logger *zerolog.Logger) error {
+
+	msg := core.Message{
+		Type: "ice",
+		From: p.ID,
+		To:   p.ID,
+		Role: p.Role,
+		Name: p.Name,
+		ICE:  candidate.ToJSON(),
+	}
+
+	p.Room.SendBack(p.ID, msg, logger)
+	return nil
 }
