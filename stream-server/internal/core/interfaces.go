@@ -11,6 +11,7 @@ type RTCConnection interface {
 	HandleICE(candidate webrtc.ICECandidateInit, logger *zerolog.Logger) error
 	//SetupTracks(logger *zerolog.Logger) error
 	Close(logger *zerolog.Logger) error
+	GetPeerConnection() *webrtc.PeerConnection
 }
 
 type RTCEventHandler interface {

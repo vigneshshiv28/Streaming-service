@@ -42,6 +42,7 @@ func NewPionRTCConnection(handler core.RTCEventHandler, logger *zerolog.Logger) 
 
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
 		// Handle incoming track
+
 	})
 
 	return rtcConn, nil
@@ -84,4 +85,8 @@ func (rc *PionRTCConnection) Close(logger *zerolog.Logger) error {
 		return err
 	}
 	return nil
+}
+
+func (rc *PionRTCConnection) GetPeerConnection() *webrtc.PeerConnection {
+	return rc.conn
 }

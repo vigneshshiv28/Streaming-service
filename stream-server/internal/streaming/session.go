@@ -29,6 +29,7 @@ type Participant struct {
 type Room struct {
 	ID           string
 	Participants map[string]*Participant
+	trackLocals  map[string]*webrtc.TrackLocalStaticRTP
 	CreatedAt    time.Time
 	mu           sync.RWMutex
 }
@@ -62,6 +63,7 @@ func (rm *RoomManager) CreateRoom(roomID string) (*Room, bool) {
 	room := &Room{
 		ID:           roomID,
 		Participants: make(map[string]*Participant),
+		trackLocals:  make(map[string]*webrtc.TrackLocalStaticRTP),
 		CreatedAt:    time.Now(),
 	}
 	rm.Rooms[roomID] = room
@@ -204,6 +206,20 @@ func (r *Room) RemoveParticipant(p *Participant, logger *zerolog.Logger) {
 	logger.Info().Str("room_id", r.ID).Str("participant_id", p.ID).Int("participant_count", participantCount).Bool("room_empty", isEmpty).Msg("participant removed from room")
 }
 
+func (r *Room) ListRTCParticipant() []*Participant {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	participants := make([]*Participant, 0)
+	for _, p := range r.Participants {
+		if p.Role != "audience" && p.rtcConn != nil {
+			participants = append(participants, p)
+		}
+	}
+
+	return participants
+}
+
 func (r *Room) Broadcast(senderID string, message core.Message, logger *zerolog.Logger) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -336,6 +352,10 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 			logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("chat message broadcasted")
 
 		case "sdp":
+
+			if p.Role == "audience" {
+				continue
+			}
 			sdp := msg.SDP.(webrtc.SessionDescription)
 
 			if sdp.Type == webrtc.SDPTypeOffer {
@@ -381,6 +401,10 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 			}
 
 		case "ice":
+
+			if p.Role == "audience" {
+				continue
+			}
 			ice := msg.ICE.(webrtc.ICECandidateInit)
 			err := p.rtcConn.HandleICE(ice, logger)
 
