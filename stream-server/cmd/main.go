@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"stream-server/internal/logger"
 	"stream-server/internal/server"
 	"stream-server/internal/streaming"
@@ -15,13 +16,14 @@ import (
 func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-
+	runtime.SetMutexProfileFraction(1)
 	log, ctx := logger.InitLogger("debug", ctx)
 
 	rm := streaming.NewRoomManager(log)
 	serv := server.NewServer(log, rm)
 
 	serv.SetupServer("8000")
+	serv.StartPprofServer("6060")
 
 	serv.RegisterRoutes()
 

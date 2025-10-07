@@ -1,29 +1,33 @@
-import { create } from "zustand"
-import { persist,createJSONStorage } from "zustand/middleware"
-import { Room } from "@/types/models"
+import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+import { Room } from "@/types/models";
 
-interface RoomState {
-    room: Room | null;
-    setRoom: (room: Room) => void;
-    updateRoom: (data: Partial<Room>) =>void
-    removeRoom: () => void
+interface RoomStoreState {
+  currentRoom: Room | null;
+  setRoom: (room: Room) => void;
+  updateRoom: (patch: Partial<Room>) => void;
+  clearRoom: () => void;
 }
 
-
-export const useRoomStore = create<RoomState>()(
+export const useRoomStore = create<RoomStoreState>()(
   persist(
     (set) => ({
-      room: null,
-      setRoom: (room) => set({ room }),
-      updateRoom: (data) =>
-        set((state) => ({
-          room: state.room ? { ...state.room, ...data } : null,
-        })),
-      removeRoom: () => set({ room: null }),
+      currentRoom: null,
+      
+      setRoom: (room) => set({ currentRoom: room }),
+      
+      updateRoom: (patch) =>
+        set((state) =>
+          state.currentRoom
+            ? { currentRoom: { ...state.currentRoom, ...patch } }
+            : state
+        ),
+      
+      clearRoom: () => set({ currentRoom: null }),
     }),
     {
       name: "room-storage",
       storage: createJSONStorage(() => sessionStorage),
     }
   )
-)
+);

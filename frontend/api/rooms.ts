@@ -1,43 +1,31 @@
 import apiClient from "./client";
+import {
+  CreateRoomRequestSchema,
+  CreateRoomResponseSchema,
+  JoinRoomRequestSchema,
+  JoinRoomResponseSchema,
+  CreateRoomRequestDto,
+  CreateRoomResponseDto,
+  JoinRoomRequestDto,
+  JoinRoomResponseDto,
+} from "./schemas";
 
-interface CreateRoomDTo{
-    userId: string;
-    name: string
-}
 
-interface JoinRoomDTo{
-    userId: string;
-    roomId: string;
-    role: string;
-}
+export async function createRoom(payload: CreateRoomRequestDto): Promise<CreateRoomResponseDto> {
 
-interface Room{
-    userId:string;
-    name:string;
-    role:string;
-    roomId:string;
-    hostURL:string;
-    guestURL:string;
-    audienceURL:string;
-    createdAt:string;
-}
+  const validatedPayload = CreateRoomRequestSchema.parse(payload);
+  const { data } = await apiClient.post("/rooms", validatedPayload);
+  const validatedResponse = CreateRoomResponseSchema.parse(data);
 
-interface JoinRoomResponse {
-  status: string;
-  userId: string;
-  role: string;
-  roomId: string;
-  wsUrl: string;
+  return validatedResponse;
 }
 
 
-export async function createRoom(payload: CreateRoomDTo):Promise<Room>{
-    console.log("calling server")
-    const {data} = await apiClient.post("/rooms",payload)
-    return data
-}
+export async function joinRoom(payload: JoinRoomRequestDto): Promise<JoinRoomResponseDto> {
 
-export async function joinRoom(payload:JoinRoomDTo):Promise<JoinRoomResponse>{
-    const {data} = await apiClient.post(`/rooms/${payload.roomId}/join`,payload)
-    return data
+  const validatedPayload = JoinRoomRequestSchema.parse(payload);
+  const { data } = await apiClient.post(`/rooms/${payload.roomId}/join`, validatedPayload);
+  const validatedResponse = JoinRoomResponseSchema.parse(data);
+
+  return validatedResponse;
 }

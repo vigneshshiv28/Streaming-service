@@ -8,12 +8,12 @@ export class PeerConnectionManager {
   private peerConnection?: RTCPeerConnection;
   private localStream?: MediaStream;
   private onIncomingStream?: (stream: IncomingStream) => void;
+  private queuedIceCandidates: RTCIceCandidate[] = [];
 
-   constructor() {
+  constructor() {
     this.createPeerConnection();
   }
 
-  
   private createPeerConnection() {
     if (this.peerConnection) {
       console.log("Closing old PeerConnection");
@@ -25,9 +25,11 @@ export class PeerConnectionManager {
     });
 
     this.peerConnection.ontrack = (event) => {
+        console.log("trackID",event.track.id)
+        console.log("New remote track:", event.track.kind);
       if (this.onIncomingStream) {
         const incomingStream: IncomingStream = {
-          peerId: "remote-peer", // TODO: set actual peer ID from signaling
+          peerId: "remote-peer",
           stream: event.streams[0],
           type: "camera",
         };
@@ -41,7 +43,6 @@ export class PeerConnectionManager {
       }
     };
   }
-
 
   async captureLocalMedia(): Promise<MediaStream> {
     this.localStream = await navigator.mediaDevices.getUserMedia({
@@ -62,7 +63,7 @@ export class PeerConnectionManager {
     return this.localStream;
   }
 
-   async createOffer(): Promise<RTCSessionDescriptionInit> {
+  async createOffer(): Promise<RTCSessionDescriptionInit> {
     if (!this.peerConnection) this.createPeerConnection();
     const offer = await this.peerConnection!.createOffer();
     await this.peerConnection!.setLocalDescription(offer);
@@ -72,6 +73,7 @@ export class PeerConnectionManager {
   async createAnswer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
     if (!this.peerConnection) this.createPeerConnection();
     await this.peerConnection!.setRemoteDescription(offer);
+    await this.processQueuedIceCandidates();
     const answer = await this.peerConnection!.createAnswer();
     await this.peerConnection!.setLocalDescription(answer);
     return answer;
@@ -80,13 +82,34 @@ export class PeerConnectionManager {
   async processRemoteSessionDescription(sdp: RTCSessionDescriptionInit) {
     if (!this.peerConnection) this.createPeerConnection();
     await this.peerConnection!.setRemoteDescription(sdp);
+    await this.processQueuedIceCandidates();
   }
 
   async addRemoteIceCandidate(ice: RTCIceCandidateInit) {
     if (!this.peerConnection) return;
+    
+    if (this.peerConnection.remoteDescription === null) {
+      this.queueIceCandidate(ice);
+      return;
+    }
+
     await this.peerConnection.addIceCandidate(new RTCIceCandidate(ice));
   }
 
+  queueIceCandidate(candidate: RTCIceCandidateInit) {
+    this.queuedIceCandidates.push(new RTCIceCandidate(candidate));
+  }
+
+  private async processQueuedIceCandidates() {
+    for (const candidate of this.queuedIceCandidates) {
+      try {
+        await this.peerConnection!.addIceCandidate(candidate);
+      } catch (error) {
+        console.error("Failed to add queued ICE candidate:", error);
+      }
+    }
+    this.queuedIceCandidates = [];
+  }
 
   onRemoteStreamReceived(callback: (stream: IncomingStream) => void) {
     this.onIncomingStream = callback;
@@ -103,5 +126,6 @@ export class PeerConnectionManager {
     }
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = undefined;
+    this.queuedIceCandidates = [];
   }
-}
+} 

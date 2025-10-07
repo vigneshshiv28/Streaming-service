@@ -6,5 +6,6 @@ export const handleIceMessage = async (
   peerManager: PeerConnectionManager
 ) => {
   console.log("Adding ICE candidate");
+  console.log("ICE message",message)
   await peerManager.addRemoteIceCandidate(message.ice);
 };

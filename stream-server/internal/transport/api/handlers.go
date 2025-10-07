@@ -22,13 +22,13 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 			return
 		}
 
-		if req.UserId == "" || req.Name == "" {
+		if req.UserId == "" || req.Name == "" || req.UserName == "" {
 			logger.Warn().
 				Str("userId", req.UserId).
 				Str("name", req.Name).
 				Str("remote_addr", r.RemoteAddr).
 				Msg("create room request missing required fields")
-			http.Error(w, "Missing required fields: userId, name, and role", http.StatusBadRequest)
+			http.Error(w, "Missing required fields: userId, name, and username", http.StatusBadRequest)
 			return
 		}
 
@@ -36,7 +36,7 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 		for {
 			roomID = rm.GenerateRoomID(8)
 
-			if _, exists := rm.CreateRoom(roomID); !exists {
+			if _, exists := rm.CreateRoom(roomID, req.Name, req.UserId); !exists {
 				break
 			}
 		}
@@ -76,14 +76,14 @@ func CreateRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(CreateRoomResponse{
-			UserID:      req.UserId,
-			Name:        req.Name,
-			RoomID:      roomID,
+			Name:        room.Name,
+			RoomID:      room.ID,
 			Role:        "host",
 			HostURL:     hostURL,
 			GuestURL:    guestURL,
 			AudienceURL: audienceURL,
 			CreatedAt:   rm.Rooms[roomID].CreatedAt.Format(`2006-01-02 15:04:05`),
+			CreatedBy:   room.CreatedBy,
 		})
 	}
 }
@@ -140,12 +140,12 @@ func JoinRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 
 		switch role {
 		case "host":
-			if len(room.Participants) > 0 {
+			if room.CreatedBy != req.UserID {
 				logger.Warn().
 					Str("roomId", roomId).
 					Str("userId", userId).
-					Msg("host already exists in room")
-				http.Error(w, "Host already exists", http.StatusForbidden)
+					Msg("Invalid request to join room as host")
+				http.Error(w, "Invalid request to join room as host", http.StatusForbidden)
 				return
 			}
 		case "guest":
@@ -182,11 +182,14 @@ func JoinRoomHandler(rm *streaming.RoomManager) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(JoinRoomResponse{
-			Status: "joined",
-			UserID: userId,
-			Role:   role,
-			RoomID: roomId,
-			WSURL:  wsURL,
+			Name:      room.Name,
+			Status:    "connecting",
+			UserID:    userId,
+			Role:      role,
+			RoomID:    roomId,
+			WSURL:     wsURL,
+			CreatedAt: room.CreatedAt.Format(`2006-01-02 15:04:05`),
+			CreatedBy: room.CreatedBy,
 		})
 	}
 }

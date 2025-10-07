@@ -1,129 +1,231 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { PeerConnectionManager, IncomingStream } from "@/lib/peerConnectionManager";
-import { handleJoinMessage } from "@/lib/handlers/joinHandler";
 import { handleSdpMessage } from "@/lib/handlers/sdpHandler";
 import { handleIceMessage } from "@/lib/handlers/iceHandler";
 import { useUserStore } from "@/store/userStore";
 import { useRoomStore } from "@/store/roomStore";
+import { useParticipantStore } from "@/store/participantStore";
+import { useVideoCallStore } from "@/store/videoCallStore";
+import { generateTrackID } from "@/lib/generateIDs";
+import { Message, TrackMetaData } from "@/types/message";
+
+
+const connectionState = {
+  isConnecting: false,
+  activeConnection: null as WebSocket | null,
+};
 
 export default function Room() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const [remotePeerStreams, setRemotePeerStreams] = useState<IncomingStream[]>([]);
-  const remotePeerIdRef = useRef<string | null>(null);
-
+  const peerManagerRef = useRef<PeerConnectionManager>(new PeerConnectionManager());
+  const webSocketRef = useRef<WebSocket>(null);
   
   const user = useUserStore((state) => state.user);
-  const room = useRoomStore((state) => state.room);
+  const room = useRoomStore((state) => state.currentRoom);
+  const participant = useParticipantStore((state) => state.currentParticipant);
+  const initializeVideoCall = useVideoCallStore((state) => state.initializeVideoCall);
+  const setAudioTrack = useVideoCallStore((state) => state.setAudioTrack);
+  const setVideoTrack = useVideoCallStore((state) => state.setVideoTrack);
+  const setScreenShareTrack = useVideoCallStore((state) => state.setScreenShareTrack);
 
   useEffect(() => {
-    if (!user || !room?.wsURL ) return;
+    if (!user || !participant || !participant.wsURL || !room) {
+      console.log(user, participant);
+      console.log("returning");
+      return;
+    }
 
-    const peerManager = new PeerConnectionManager();
-    const webSocket = new WebSocket(`${room.wsURL}`);
+    if (connectionState.isConnecting || 
+        (connectionState.activeConnection?.readyState === WebSocket.OPEN ||
+         connectionState.activeConnection?.readyState === WebSocket.CONNECTING)) {
+      console.log("Connection already exists, reusing...");
+      webSocketRef.current = connectionState.activeConnection;
+      return;
+    }
 
-    webSocket.onopen = () => {
-      console.log("WebSocket connected");
-      console.log("Sending join message");
-      
-      webSocket.send(JSON.stringify({
-        type: "join",
-        from: user.id,
-        role: room.role,
-        name: user.name,
-      }));
-    };
+    connectionState.isConnecting = true;
+    let isConnected = false;
+    const peerManager = peerManagerRef.current;
 
-    webSocket.onclose = () => {
-      console.log("WebSocket disconnected");
-    };
+    const setupAndConnect = async () => {
+      const ws = new WebSocket(`${participant.wsURL}`);
+      webSocketRef.current = ws;
+      connectionState.activeConnection = ws;
 
-    webSocket.onerror = (error) => {
-      console.error("WebSocket error:", error);
-    };
-
-    peerManager.captureLocalMedia().then((stream) => {
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
+      if (!ws) {
+        alert("fail to create ws object");
+        connectionState.isConnecting = false;
+        return;
       }
-    }).catch((error) => {
-      console.error("Failed to capture local media:", error);
-      alert("Unable to access camera/microphone: " + error.message);
-    });
 
-  
-    peerManager.onRemoteStreamReceived((incomingStream) => {
-      console.log("Received remote stream:", incomingStream.peerId);
-      
-      setRemotePeerStreams((previousStreams) => {
-    
-        if (previousStreams.find((s) => s.peerId === incomingStream.peerId)) {
-          return previousStreams;
-        }
-        return [...previousStreams, incomingStream];
-      });
-    });
+      ws.onopen = async () => {
+        isConnected = true;
+        connectionState.isConnecting = false;
+        console.log("webSocketRef connected");
+        console.log("room", room);
 
-   
-    webSocket.onmessage = async (event) => {
-      const message = JSON.parse(event.data);
-      console.log("Received message:", message);
-
-      try {
-        switch (message.type) {
-          case 'join':
-            if (room.role === "host" && message.role === "guest") {
-                remotePeerIdRef.current = message.from ?? null;
-
-            } else if (room.role === "guest" && message.role === "host") {
-                remotePeerIdRef.current = message.from ?? null;
-            }
-            await handleJoinMessage(message, webSocket, peerManager, room, user);
-            break;
-            
-          case 'sdp':
-            if (!remotePeerIdRef.current && message.from) {
-                remotePeerIdRef.current = message.from;
-            }
-            await handleSdpMessage(message, webSocket, peerManager, user, room);
-            break;
-            
-          case 'ice':
-            await handleIceMessage(message, webSocket, peerManager);
-            break;
-            
-          case 'participant_left':
-            console.log("SFU message received (not implemented yet):", message.type);
-            break;
-            
-          default:
-            console.warn("Unknown message type:", message.type);
-        }
-      } catch (error) {
-        console.error("Error handling message:", error);
-      }
-    };
-    peerManager.getPeerConnectionInstance().onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log("Sending ICE candidate");
-        
-        webSocket.send(JSON.stringify({
-          type: "ice",
+        const joinMessage: Message = {
+          type: "join",
           from: user.id,
-          role: room.role,
-          to: remotePeerIdRef.current,
-          ice: event.candidate,
-        }));
-      }
+          role: participant.role,
+          name: user.name,
+        };
+
+        ws.send(JSON.stringify(joinMessage));
+      };
+
+      ws.onclose = () => {
+        isConnected = false;
+        connectionState.isConnecting = false;
+        connectionState.activeConnection = null;
+        console.log("webSocketRef disconnected");
+      };
+
+      ws.onerror = (error) => {
+        connectionState.isConnecting = false;
+        console.error("webSocketRef error:", error);
+      };
+
+      ws.onmessage = async (event) => {
+        const message = JSON.parse(event.data);
+        try {
+          switch (message.type) {
+            case 'join_ack':
+              console.log("Join acknowledged by server");
+              if (participant.role === "host" || participant.role === "guest") {
+                try {
+                  const stream = await peerManager.captureLocalMedia();
+                  console.log("Generated track:", stream.getTracks());
+                  if (localVideoRef.current) {
+                    localVideoRef.current.srcObject = stream;
+                  }
+
+                  let currentState = useVideoCallStore.getState().videoCall;
+
+                  if (!currentState) {
+                    initializeVideoCall();
+                    currentState = useVideoCallStore.getState().videoCall;
+                  }
+
+                  if (!currentState) {
+                    console.error("Failed to initialize video call state");
+                    return;
+                  }
+                } catch (error) {
+                  console.error("Failed to capture local media:", error);
+                  alert("Unable to access camera/microphone: " + error.message);
+                  return;
+                }
+
+                const state = useVideoCallStore.getState().videoCall!;
+
+                let audioId = state.audioTrackId;
+                let videoId = state.videoTrackId;
+                let screenId = state.screenShareId;
+
+                if (!state.muted && !audioId) {
+                  audioId = generateTrackID("audio");
+                  setAudioTrack(audioId);
+                }
+
+                if (state.cameraOn && !videoId) {
+                  videoId = generateTrackID("video");
+                  setVideoTrack(videoId);
+                }
+
+                if (state.screenSharing && !screenId) {
+                  screenId = generateTrackID("screen");
+                  setScreenShareTrack(screenId);
+                }
+
+                console.log("video call state", state);
+                console.log("creating offer");
+
+                const offer = await peerManager.createOffer();
+
+                const trackMetaData: TrackMetaData[] = [
+                  state.muted === false && audioId
+                    ? {
+                        id: audioId,
+                        kind: "audio",
+                        participantId: participant.id,
+                        participantName: participant.name,
+                      }
+                    : null,
+                  state.cameraOn === true && videoId
+                    ? {
+                        id: videoId,
+                        kind: "video",
+                        participantId: participant.id,
+                        participantName: participant.name,
+                      }
+                    : null,
+                  state.screenSharing === true && screenId
+                    ? {
+                        id: screenId,
+                        kind: "screen",
+                        participantId: participant.id,
+                        participantName: participant.name,
+                      }
+                    : null,
+                ].filter((t): t is TrackMetaData => t !== null);
+
+                console.log("trackMetaData", trackMetaData);
+                const sdpOfferMessage: Message = {
+                  type: "sdp",
+                  sdp: offer,
+                  from: user.id,
+                  role: participant.role,
+                  incomingTrackMetaData: trackMetaData,
+                };
+                ws.send(JSON.stringify(sdpOfferMessage));
+              }
+
+              peerManager.onRemoteStreamReceived((incomingStream) => {
+                setRemotePeerStreams((prev) =>
+                  prev.find((s) => s.stream.id === incomingStream.stream.id)
+                    ? prev
+                    : [...prev, incomingStream]
+                );
+              });
+              break;
+
+            case 'join':
+              break;
+
+            case 'sdp':
+              await handleSdpMessage(message, ws, peerManager, user, participant, room);
+              break;
+
+            case 'ice':
+              await handleIceMessage(message, ws, peerManager);
+              break;
+
+            case 'participant_left':
+              const leftPeerId = JSON.parse(message.content).participant_id;
+              setRemotePeerStreams((prev) => prev.filter((p) => p.peerId !== leftPeerId));
+              break;
+            default:
+              console.warn("Unknown message type:", message.type);
+          }
+        } catch (error) {
+          console.error("Error handling message:", error);
+        }
+      };
     };
 
- 
+    setupAndConnect();
+
     return () => {
-      console.log("Cleaning up WebSocket and PeerConnection");
-      webSocket.close();
+      if (isConnected && webSocketRef.current) {
+        webSocketRef.current.close();
+        connectionState.activeConnection = null;
+      }
       peerManager.cleanup();
     };
-  }, [room, user]);
+  }, [participant?.wsURL, room?.roomId, user?.id]);
 
   if (!room) {
     return (
@@ -136,20 +238,15 @@ export default function Room() {
   return (
     <div style={{ padding: 20 }}>
       <h1>Video Room: {room.name || room.roomId}</h1>
-      
+
       <div style={{ marginBottom: 20 }}>
         <h2>My Video</h2>
-        <video 
-          ref={localVideoRef} 
-          autoPlay 
-          playsInline 
-          muted 
-          style={{ 
-            width: 300, 
-            height: 200, 
-            border: '2px solid #333',
-            borderRadius: 8 
-          }} 
+        <video
+          ref={localVideoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{ width: 300, height: 200, border: '2px solid #333', borderRadius: 8 }}
         />
       </div>
 
@@ -164,19 +261,13 @@ export default function Room() {
                 ref={(video) => {
                   if (video) video.srcObject = remotePeer.stream;
                 }}
-                style={{ 
-                  width: 300, 
-                  height: 200,
-                  border: '2px solid #666',
-                  borderRadius: 8 
-                }}
+                style={{ width: 300, height: 200, border: '2px solid #666', borderRadius: 8 }}
               />
               <p style={{ margin: '8px 0 0 0', fontSize: 14, color: '#666' }}>
-                {remotePeer.peerId} ({remotePeer.type})
+                {remotePeer.peerId}
               </p>
             </div>
           ))}
-          
           {remotePeerStreams.length === 0 && (
             <p style={{ color: '#888', fontStyle: 'italic' }}>
               Waiting for other participants to join...

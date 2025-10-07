@@ -1,7 +1,6 @@
 package api
 
 type CreateRoomResponse struct {
-	UserID      string `json:"userId"`
 	Name        string `json:"name"`
 	Role        string `json:"role"`
 	RoomID      string `json:"roomId"`
@@ -9,12 +8,16 @@ type CreateRoomResponse struct {
 	GuestURL    string `json:"guestURL"`
 	AudienceURL string `json:"audienceURL"`
 	CreatedAt   string `json:"createdAt"`
+	CreatedBy   string `json:"createdBy"`
 }
 
 type JoinRoomResponse struct {
-	Status string `json:"status"`
-	UserID string `json:"userId"`
-	Role   string `json:"role"`
-	RoomID string `json:"roomId"`
-	WSURL  string `json:"wsUrl"`
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	UserID    string `json:"userId"`
+	Role      string `json:"role"`
+	RoomID    string `json:"roomId"`
+	WSURL     string `json:"wsURL"`
+	CreatedAt string `json:"createdAt"`
+	CreatedBy string `json:"createdBy"`
 }

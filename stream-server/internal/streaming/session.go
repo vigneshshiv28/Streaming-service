@@ -12,25 +12,36 @@ import (
 
 	"github.com/pion/webrtc/v4"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 type Participant struct {
-	ID       string
-	Name     string
-	Role     string
-	Conn     core.Connection
-	rtcConn  core.RTCConnection
-	Room     *Room
-	Status   string
-	SendChan chan core.Message
-	JoinedAt time.Time
+	ID        string
+	Name      string
+	Role      string
+	Conn      core.Connection
+	rtcConn   core.RTCConnection
+	Room      *Room
+	Status    string
+	SendChan  chan core.Message
+	JoinedAt  time.Time
+	closeOnce sync.Once
+}
+
+type TrackMeta struct {
+	TrackLocal    *webrtc.TrackLocalStaticRTP
+	ParticipantID string
+	Kind          string
 }
 
 type Room struct {
+	Name         string
 	ID           string
 	Participants map[string]*Participant
 	trackLocals  map[string]*webrtc.TrackLocalStaticRTP
+	trackMeta    map[string]TrackMeta
 	CreatedAt    time.Time
+	CreatedBy    string
 	mu           sync.RWMutex
 }
 
@@ -51,7 +62,7 @@ func (rm *RoomManager) GetLogger() *zerolog.Logger {
 	return rm.logger
 }
 
-func (rm *RoomManager) CreateRoom(roomID string) (*Room, bool) {
+func (rm *RoomManager) CreateRoom(roomID string, roomName string, createdBy string) (*Room, bool) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
@@ -61,10 +72,13 @@ func (rm *RoomManager) CreateRoom(roomID string) (*Room, bool) {
 	}
 
 	room := &Room{
+		Name:         roomName,
 		ID:           roomID,
 		Participants: make(map[string]*Participant),
 		trackLocals:  make(map[string]*webrtc.TrackLocalStaticRTP),
+		trackMeta:    make(map[string]TrackMeta),
 		CreatedAt:    time.Now(),
+		CreatedBy:    createdBy,
 	}
 	rm.Rooms[roomID] = room
 
@@ -149,6 +163,7 @@ func (rm *RoomManager) CloseAllRooms() {
 }
 
 func (r *Room) AddParticipant(p *Participant, logger *zerolog.Logger) error {
+	logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("adding participant to room")
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -178,32 +193,41 @@ func (r *Room) AddParticipant(p *Participant, logger *zerolog.Logger) error {
 }
 
 func (r *Room) RemoveParticipant(p *Participant, logger *zerolog.Logger) {
-	r.mu.Lock()
-	_, ok := r.Participants[p.ID]
-	if !ok {
-		r.mu.Unlock()
-		return
-	}
-	delete(r.Participants, p.ID)
+	p.closeOnce.Do(func() {
+		r.mu.Lock()
 
-	participantCount := len(r.Participants)
-	isEmpty := participantCount == 0
-	r.mu.Unlock()
-
-	p.Conn.Close()
-	close(p.SendChan)
-	if !isEmpty {
-		leaveMsg := core.Message{
-			Type:    "participant_left",
-			From:    p.ID,
-			Action:  "leave",
-			Content: fmt.Sprintf(`{"participant_count":%d,"participant_id":"%s","participant_name":"%s"}`, participantCount, p.ID, p.Name),
+		if _, ok := r.Participants[p.ID]; !ok {
+			r.mu.Unlock()
+			return
 		}
-		r.Broadcast(p.ID, leaveMsg, logger)
-		logger.Info().Str("room_id", r.ID).Str("participant_id", p.ID).Int("participant_count", participantCount).Msg("notified remaining participants of departure")
-	}
 
-	logger.Info().Str("room_id", r.ID).Str("participant_id", p.ID).Int("participant_count", participantCount).Bool("room_empty", isEmpty).Msg("participant removed from room")
+		delete(r.Participants, p.ID)
+		participantCount := len(r.Participants)
+
+		r.mu.Unlock()
+
+		if p.rtcConn != nil {
+			_ = p.rtcConn.Close(logger)
+		}
+		p.Conn.Close()
+		close(p.SendChan)
+
+		if participantCount > 0 {
+			leaveMsg := core.Message{
+				Type:    "participant_left",
+				From:    p.ID,
+				Action:  "leave",
+				Content: fmt.Sprintf(`{"participant_count":%d,"participant_id":"%s","participant_name":"%s"}`, participantCount, p.ID, p.Name),
+			}
+			r.Broadcast(p.ID, leaveMsg, logger)
+		}
+
+		logger.Info().
+			Str("room_id", r.ID).
+			Str("participant_id", p.ID).
+			Int("participant_count", participantCount).
+			Msg("participant removed")
+	})
 }
 
 func (r *Room) ListRTCParticipant() []*Participant {
@@ -236,15 +260,10 @@ func (r *Room) Broadcast(senderID string, message core.Message, logger *zerolog.
 	}
 }
 
-func (r *Room) SendBack(senderID string, message core.Message, logger *zerolog.Logger) error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+func (r *Room) sendBackLocked(senderID string, message core.Message, logger *zerolog.Logger) error {
 	p, ok := r.Participants[senderID]
-
 	if !ok {
-		logger.Warn().Str("room_id", r.ID).Str("sender_id", senderID).Msg("sender not found in room")
-		return fmt.Errorf("")
+		return fmt.Errorf("participant not found")
 	}
 
 	select {
@@ -253,9 +272,14 @@ func (r *Room) SendBack(senderID string, message core.Message, logger *zerolog.L
 		return nil
 	default:
 		logger.Warn().Str("room_id", r.ID).Str("sender_id", senderID).Msg("failed to send message, channel full")
-		return fmt.Errorf("not able to send the message to %s", senderID)
-
+		return fmt.Errorf("channel full for participant %s", senderID)
 	}
+}
+
+func (r *Room) SendBack(senderID string, message core.Message, logger *zerolog.Logger) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.sendBackLocked(senderID, message, logger)
 }
 
 func (r *Room) SendTo(senderID string, receiverID string, message core.Message, logger *zerolog.Logger) error {
@@ -328,8 +352,6 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 			return
 		}
 
-		logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).RawJSON("raw_message", msgBytes).Msg("received message")
-
 		var msg core.Message
 		if err := json.Unmarshal(msgBytes, &msg); err != nil {
 			logger.Warn().Str("room_id", r.ID).Str("participant_id", p.ID).Err(err).Msg("invalid JSON")
@@ -354,13 +376,45 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 		case "sdp":
 
 			if p.Role == "audience" {
+				logger.Warn().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("audience member sent an SDP message, ignoring")
 				continue
 			}
-			sdp := msg.SDP.(webrtc.SessionDescription)
+			sdp := *msg.SDP
 
 			if sdp.Type == webrtc.SDPTypeOffer {
 				var err error
-				p.rtcConn, err = rtc.NewPionRTCConnection(p, logger)
+				tracksMetaData := msg.IncomingTracks
+
+				logger.Debug().Msgf("Processing %d incoming tracks", len(tracksMetaData))
+				for _, trackMetaData := range tracksMetaData {
+
+					logger.Debug().
+						Str("room_id", r.ID).
+						Str("participant_id", trackMetaData.ParticipantID).
+						Str("track_id", trackMetaData.ClientTrackID).
+						Str("track_kind", trackMetaData.Kind).
+						Msg("Incoming track metadata")
+
+					if _, exists := r.Participants[trackMetaData.ParticipantID]; !exists {
+						log.Warn().Str("room_id", r.ID).Str("participant_id", trackMetaData.ParticipantID).Msg("SDP offer send by participant that doesn't exist in room")
+						continue
+					}
+
+				}
+
+				if p.rtcConn != nil {
+					logger.Warn().
+						Str("room_id", r.ID).
+						Str("participant_id", p.ID).
+						Msg("Existing RTC connection found cleaning up before creating new one")
+
+					p.rtcConn.Close(logger)
+					p.rtcConn = nil
+
+					time.Sleep(200 * time.Millisecond)
+				}
+
+				p.rtcConn, err = rtc.NewPionRTCConnection(p, tracksMetaData, logger)
 
 				if err != nil {
 					logger.Error().Err(err).Msg("unable to create peer connection")
@@ -390,14 +444,34 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 					continue
 
 				}
-
+				responseTrackMetaData := r.GetTracks(logger)
+				for i, track := range responseTrackMetaData {
+					logger.Debug().
+						Int("index", i).
+						Str("track_id", track.TrackID).
+						Str("participant_id", track.ParticipantID).
+						Str("kind", track.Kind).
+						Msg("response track metadata")
+				}
 				responseMsg := core.Message{
-					Type: "sdp",
-					SDP:  answer,
+					Type:           "sdp",
+					SDP:            &answer,
+					OutgoingTracks: responseTrackMetaData,
 				}
 
 				p.Room.SendBack(p.ID, responseMsg, logger)
 				logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("sdp answer send to the user")
+				p.Room.signalPeerConnectionsLocked(logger)
+			} else if sdp.Type == webrtc.SDPTypeAnswer {
+				if err := p.rtcConn.HandleSDPAnswer(sdp); err != nil {
+					logger.Error().Str("room_id", r.ID).Str("participant_id", p.ID).Err(err).Msg("unable to handle sdp answer")
+					errMsg := core.Message{
+						Type:    "error",
+						To:      p.ID,
+						Content: fmt.Sprintf("Failed to handle SDP answer: %v", err),
+					}
+					p.Room.SendBack(p.ID, errMsg, logger)
+				}
 			}
 
 		case "ice":
@@ -405,7 +479,12 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 			if p.Role == "audience" {
 				continue
 			}
-			ice := msg.ICE.(webrtc.ICECandidateInit)
+
+			if p.rtcConn == nil {
+				logger.Warn().Str("participant_id", p.ID).Msg("received ICE candidate before RTC connection was established, ignoring")
+				continue
+			}
+			ice := *msg.ICE
 			err := p.rtcConn.HandleICE(ice, logger)
 
 			if err != nil {
@@ -426,6 +505,12 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 			}
 
 		case "join":
+			joiningAck := core.Message{
+				Type:    "join_ack",
+				To:      p.ID,
+				Content: fmt.Sprintf(`{"room_id":"%s","participant_id":"%s","participant_name":"%s","participant_role":"%s"}`, r.ID, p.ID, p.Name, p.Role),
+			}
+			p.Room.SendBack(p.ID, joiningAck, logger)
 			r.Broadcast(p.ID, msg, logger)
 			logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("joining message broadcasted")
 
@@ -455,13 +540,14 @@ func (p *Participant) WritePump(logger *zerolog.Logger) {
 
 func (p *Participant) OnICECandidate(candidate *webrtc.ICECandidate, logger *zerolog.Logger) error {
 
+	iceInit := candidate.ToJSON()
 	msg := core.Message{
 		Type: "ice",
 		From: p.ID,
 		To:   p.ID,
 		Role: p.Role,
 		Name: p.Name,
-		ICE:  candidate.ToJSON(),
+		ICE:  &iceInit,
 	}
 
 	p.Room.SendBack(p.ID, msg, logger)
