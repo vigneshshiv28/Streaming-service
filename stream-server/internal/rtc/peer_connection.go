@@ -9,12 +9,17 @@ import (
 	"github.com/rs/zerolog"
 )
 
-type PionRTCConnection struct {
-	conn    *webrtc.PeerConnection
-	handler core.RTCEventHandler
+type Signaller interface {
+	SignalPeerConnections(logger *zerolog.Logger)
 }
 
-func NewPionRTCConnection(handler core.RTCEventHandler, tracksMetaData []core.IncomingTrackMetaData, logger *zerolog.Logger) (*PionRTCConnection, error) {
+type PionRTCConnection struct {
+	conn      *webrtc.PeerConnection
+	handler   core.RTCEventHandler
+	signaller Signaller
+}
+
+func NewPionRTCConnection(handler core.RTCEventHandler, tracksMetaData []core.IncomingTrackMetaData, logger *zerolog.Logger, signaller Signaller) (*PionRTCConnection, error) {
 	config := webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{
@@ -56,11 +61,24 @@ func NewPionRTCConnection(handler core.RTCEventHandler, tracksMetaData []core.In
 				break
 			}
 		}
-
+		//signaller.SignalPeerConnections(logger)
 		if err := handler.ForwardTracks(track, participantID, participantName, kind, clientTrackID, receiver, logger); err != nil {
 			logger.Error().Err(err)
 		}
 
+	})
+
+	pc.OnConnectionStateChange(func(p webrtc.PeerConnectionState) {
+
+		switch p {
+		case webrtc.PeerConnectionStateFailed:
+			if err := pc.Close(); err != nil {
+
+			}
+		case webrtc.PeerConnectionStateConnected, webrtc.PeerConnectionStateClosed:
+			signaller.SignalPeerConnections(logger)
+		default:
+		}
 	})
 
 	return rtcConn, nil

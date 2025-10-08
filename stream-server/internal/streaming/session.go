@@ -42,6 +42,7 @@ type Room struct {
 	trackMeta    map[string]TrackMeta
 	CreatedAt    time.Time
 	CreatedBy    string
+	syncTimer    *time.Timer
 	mu           sync.RWMutex
 }
 
@@ -79,6 +80,7 @@ func (rm *RoomManager) CreateRoom(roomID string, roomName string, createdBy stri
 		trackMeta:    make(map[string]TrackMeta),
 		CreatedAt:    time.Now(),
 		CreatedBy:    createdBy,
+		syncTimer:    nil,
 	}
 	rm.Rooms[roomID] = room
 
@@ -414,7 +416,7 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 					time.Sleep(200 * time.Millisecond)
 				}
 
-				p.rtcConn, err = rtc.NewPionRTCConnection(p, tracksMetaData, logger)
+				p.rtcConn, err = rtc.NewPionRTCConnection(p, tracksMetaData, logger, p.Room)
 
 				if err != nil {
 					logger.Error().Err(err).Msg("unable to create peer connection")
@@ -461,7 +463,7 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 
 				p.Room.SendBack(p.ID, responseMsg, logger)
 				logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("sdp answer send to the user")
-				p.Room.signalPeerConnectionsLocked(logger)
+				//p.Room.SignalPeerConnections(logger)
 			} else if sdp.Type == webrtc.SDPTypeAnswer {
 				if err := p.rtcConn.HandleSDPAnswer(sdp); err != nil {
 					logger.Error().Str("room_id", r.ID).Str("participant_id", p.ID).Err(err).Msg("unable to handle sdp answer")
@@ -536,6 +538,20 @@ func (p *Participant) WritePump(logger *zerolog.Logger) {
 
 		logger.Debug().Str("room_id", p.Room.ID).Str("participant_id", p.ID).Str("message_type", msg.Type).Msg("message sent to participant")
 	}
+}
+
+func (r *Room) scheduleSync(logger *zerolog.Logger) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.syncTimer != nil {
+		r.syncTimer.Stop()
+	}
+
+	r.syncTimer = time.AfterFunc(200*time.Millisecond, func() {
+		logger.Debug().Str("room_id", r.ID).Msg("Sync timer fired, signaling peer connections")
+		r.SignalPeerConnections(logger)
+	})
 }
 
 func (p *Participant) OnICECandidate(candidate *webrtc.ICECandidate, logger *zerolog.Logger) error {

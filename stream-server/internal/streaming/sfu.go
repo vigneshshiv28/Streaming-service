@@ -18,7 +18,7 @@ func (r *Room) AddTrack(track *webrtc.TrackRemote, logger *zerolog.Logger) *webr
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to create local track")
 		r.mu.Unlock()
-		r.signalPeerConnectionsLocked(logger)
+		r.SignalPeerConnections(logger)
 		return nil
 	}
 
@@ -35,7 +35,7 @@ func (r *Room) RemoveTrack(track *webrtc.TrackLocalStaticRTP, logger *zerolog.Lo
 	delete(r.trackLocals, track.ID())
 	r.mu.Unlock()
 
-	r.signalPeerConnectionsLocked(logger)
+	r.SignalPeerConnections(logger)
 }
 
 func (r *Room) dispatchKeyFrame() {
@@ -61,7 +61,7 @@ func (r *Room) dispatchKeyFrame() {
 	}
 }
 
-func (r *Room) signalPeerConnectionsLocked(logger *zerolog.Logger) {
+func (r *Room) SignalPeerConnections(logger *zerolog.Logger) {
 	r.mu.Lock()
 
 	defer func() {
@@ -121,6 +121,14 @@ func (r *Room) signalPeerConnectionsLocked(logger *zerolog.Logger) {
 				}
 			}
 
+			if peerConnection.SignalingState() != webrtc.SignalingStateStable {
+				logger.Warn().
+					Str("participant_id", participant.ID).
+					Str("state", peerConnection.SignalingState().String()).
+					Msg("PeerConnection not stable, skipping offer creation")
+				continue
+			}
+
 			offer, err := peerConnection.CreateOffer(nil)
 			if err != nil {
 				logger.Error().Err(err).Str("participant_id", participant.ID).Msg("failed to create offer")
@@ -151,7 +159,7 @@ func (r *Room) signalPeerConnectionsLocked(logger *zerolog.Logger) {
 
 			go func() {
 				time.Sleep(time.Second * 3)
-				r.signalPeerConnectionsLocked(logger)
+				r.SignalPeerConnections(logger)
 			}()
 
 			return
@@ -212,6 +220,8 @@ func (p *Participant) ForwardTracks(track *webrtc.TrackRemote, participantID str
 	}
 	logger.Debug().Msg("Added Meta Data")
 	p.Room.mu.Unlock()
+
+	p.Room.scheduleSync(logger)      
 
 	defer p.Room.RemoveTrack(trackLocal, logger)
 	defer func() {
