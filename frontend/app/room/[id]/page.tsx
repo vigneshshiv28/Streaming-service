@@ -8,7 +8,9 @@ import { useRoomStore } from "@/store/roomStore";
 import { useParticipantStore } from "@/store/participantStore";
 import { useVideoCallStore } from "@/store/videoCallStore";
 import { generateTrackID } from "@/lib/generateIDs";
-import { Message, TrackMetaData } from "@/types/message";
+import { MessageSchema, TrackMetaDataSchema } from "@/schemas"; 
+import { Participant, Role, ConnectionStatus } from "@/types/models";
+import {z} from "zod";
 
 
 const connectionState = {
@@ -17,18 +19,22 @@ const connectionState = {
 };
 
 export default function Room() {
-  const localVideoRef = useRef<HTMLVideoElement>(null);
-  const [remotePeerStreams, setRemotePeerStreams] = useState<IncomingStream[]>([]);
-  const peerManagerRef = useRef<PeerConnectionManager>(new PeerConnectionManager());
-  const webSocketRef = useRef<WebSocket>(null);
-  
   const user = useUserStore((state) => state.user);
   const room = useRoomStore((state) => state.currentRoom);
   const participant = useParticipantStore((state) => state.currentParticipant);
+  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const [remotePeerStreams, setRemotePeerStreams] = useState<IncomingStream[]>([]);
+  const peerManagerRef = useRef<PeerConnectionManager>(new PeerConnectionManager(user!));
+  const webSocketRef = useRef<WebSocket>(null);
+  
+
   const initializeVideoCall = useVideoCallStore((state) => state.initializeVideoCall);
   const setAudioTrack = useVideoCallStore((state) => state.setAudioTrack);
   const setVideoTrack = useVideoCallStore((state) => state.setVideoTrack);
   const setScreenShareTrack = useVideoCallStore((state) => state.setScreenShareTrack);
+  const videoCall = useVideoCallStore((state) => state.videoCall)
+  const addParticipant = useVideoCallStore((state) => state.addParticipant)
+  const addParticipants = useVideoCallStore((state) => state.addParticipants)
 
   useEffect(() => {
     if (!user || !participant || !participant.wsURL || !room) {
@@ -66,14 +72,22 @@ export default function Room() {
         console.log("webSocketRef connected");
         console.log("room", room);
 
-        const joinMessage: Message = {
+        const joinMessage = {
           type: "join",
           from: user.id,
           role: participant.role,
           name: user.name,
         };
 
-        ws.send(JSON.stringify(joinMessage));
+        const joinMessageResult = MessageSchema.safeParse(joinMessage);
+
+        
+        if (!joinMessageResult.success) {
+          console.error("Invalid join message schema:");
+          return;
+        }
+
+        ws.send(JSON.stringify(joinMessageResult.data));
       };
 
       ws.onclose = () => {
@@ -89,15 +103,40 @@ export default function Room() {
       };
 
       ws.onmessage = async (event) => {
-        const message = JSON.parse(event.data);
+
+        let parseData
+        try{
+          parseData = JSON.parse(event.data)
+        } catch(error){
+          console.log("err",error)
+        }
+        console.log(parseData)
+        const messageResult = MessageSchema.safeParse(parseData)
+
+        if (!messageResult.success){
+          console.log("Received invalid message schema",messageResult.error)
+          return
+        }
+
+        const message = messageResult.data
         try {
           switch (message.type) {
             case 'join_ack':
               console.log("Join acknowledged by server");
+
+
+              peerManager.onRemoteStreamReceived((incomingStream) => {
+                setRemotePeerStreams(prev => {
+                  const newArr = prev.find(s => s.stream.id === incomingStream.stream.id) ? prev : [...prev, incomingStream];
+                  return newArr;
+                });
+              });
+            
               if (participant.role === "host" || participant.role === "guest") {
                 try {
                   const stream = await peerManager.captureLocalMedia();
                   console.log("Generated track:", stream.getTracks());
+                  
                   if (localVideoRef.current) {
                     localVideoRef.current.srcObject = stream;
                   }
@@ -143,9 +182,20 @@ export default function Room() {
                 console.log("video call state", state);
                 console.log("creating offer");
 
+                const participants = message.state
+                .filter(p => p.id !== participant.id)
+                .map(p => ({
+                  id: p.id,
+                  name: p.name,
+                  role: p.role as Role,
+                  status: p.status as ConnectionStatus,
+                }));
+                console.log("Participants:", participants)
+                addParticipants(participants);
+
                 const offer = await peerManager.createOffer();
 
-                const trackMetaData: TrackMetaData[] = [
+                const trackMetaData = [
                   state.muted === false && audioId
                     ? {
                         id: audioId,
@@ -170,43 +220,64 @@ export default function Room() {
                         participantName: participant.name,
                       }
                     : null,
-                ].filter((t): t is TrackMetaData => t !== null);
+                ].filter((t)=> t !== null);
+                const trackMetaDataResult = z.array(TrackMetaDataSchema).safeParse(trackMetaData);
 
-                console.log("trackMetaData", trackMetaData);
-                const sdpOfferMessage: Message = {
+                if (!trackMetaDataResult.success){
+                  console.log("Fail to parse MetaData")
+                  return 
+                }
+
+                console.log("trackMetaData", trackMetaDataResult.data)  ;
+                const sdpOfferMessage = {
                   type: "sdp",
                   sdp: offer,
                   from: user.id,
                   role: participant.role,
-                  incomingTrackMetaData: trackMetaData,
+                  incomingTrackMetaData: trackMetaDataResult.data,
                 };
-                ws.send(JSON.stringify(sdpOfferMessage));
-              }
 
-              peerManager.onRemoteStreamReceived((incomingStream) => {
-                setRemotePeerStreams((prev) =>
-                  prev.find((s) => s.stream.id === incomingStream.stream.id)
-                    ? prev
-                    : [...prev, incomingStream]
-                );
-              });
+                const sdpOfferMessageRes = MessageSchema.safeParse(sdpOfferMessage)
+                if(!sdpOfferMessageRes.success){
+                  console.log("Invalid sdp message ")
+                }
+
+                ws.send(JSON.stringify(sdpOfferMessageRes.data));
+              }
               break;
 
             case 'join':
+              if (message.from && message.role && message.name){
+                const newParticipant:Participant = {
+                  id: message.from,
+                  name: message.name,
+                  role: message.role as Role,
+                  status: "connected"
+                }
+                addParticipant(newParticipant)
+              } else{
+                console.log("empty join message")
+              }
+              
               break;
 
             case 'sdp':
-              await handleSdpMessage(message, ws, peerManager, user, participant, room);
+              await handleSdpMessage(message, ws, peerManager, user, participant);
               break;
 
             case 'ice':
               await handleIceMessage(message, ws, peerManager);
               break;
-
+            /*
             case 'participant_left':
-              const leftPeerId = JSON.parse(message.content).participant_id;
+              if (message.content == null ){
+                console.log("message missing content");
+                break;
+              }
+              const leftPeerId = JSON.parse(message .content).participant_id;
               setRemotePeerStreams((prev) => prev.filter((p) => p.peerId !== leftPeerId));
               break;
+            */
             default:
               console.warn("Unknown message type:", message.type);
           }
@@ -248,33 +319,29 @@ export default function Room() {
           muted
           style={{ width: 300, height: 200, border: '2px solid #333', borderRadius: 8 }}
         />
-      </div>
+        </div>
+ 
+        {videoCall?.participants.map((p) => {
+ 
+          const stream = new MediaStream(
+            remotePeerStreams
+              .filter((s) => s.peerId === p.id)
+              .flatMap((s) => s.stream.getTracks())
+          );
 
-      <div>
-        <h2>Remote Participants ({remotePeerStreams.length})</h2>
-        <div style={{ display: "flex", gap: 15, flexWrap: "wrap" }}>
-          {remotePeerStreams.map((remotePeer) => (
-            <div key={remotePeer.peerId} style={{ textAlign: 'center' }}>
+          return (
+            <div key={p.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
               <video
+                ref={(el) => { if (el) el.srcObject = stream; }}
                 autoPlay
                 playsInline
-                ref={(video) => {
-                  if (video) video.srcObject = remotePeer.stream;
-                }}
-                style={{ width: 300, height: 200, border: '2px solid #666', borderRadius: 8 }}
+                style={{ width: 200, height: 150, border: "2px solid #333", borderRadius: 8 }}
               />
-              <p style={{ margin: '8px 0 0 0', fontSize: 14, color: '#666' }}>
-                {remotePeer.peerId}
-              </p>
+              <span>{p.name}</span>
             </div>
-          ))}
-          {remotePeerStreams.length === 0 && (
-            <p style={{ color: '#888', fontStyle: 'italic' }}>
-              Waiting for other participants to join...
-            </p>
-          )}
-        </div>
+          );
+        })}
+
       </div>
-    </div>
   );
 }

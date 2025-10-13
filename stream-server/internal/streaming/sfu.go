@@ -15,6 +15,8 @@ func (r *Room) AddTrack(track *webrtc.TrackRemote, logger *zerolog.Logger) *webr
 
 	r.mu.Lock()
 	trackLocal, err := webrtc.NewTrackLocalStaticRTP(track.Codec().RTPCodecCapability, track.ID(), track.StreamID())
+
+	logger.Debug().Str("track_id", trackLocal.ID()).Msg("Adding new track to the map")
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to create local track")
 		r.mu.Unlock()
@@ -221,7 +223,7 @@ func (p *Participant) ForwardTracks(track *webrtc.TrackRemote, participantID str
 	logger.Debug().Msg("Added Meta Data")
 	p.Room.mu.Unlock()
 
-	p.Room.scheduleSync(logger)      
+	p.Room.scheduleSync(logger)
 
 	defer p.Room.RemoveTrack(trackLocal, logger)
 	defer func() {

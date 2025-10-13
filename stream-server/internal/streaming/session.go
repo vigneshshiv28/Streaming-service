@@ -343,7 +343,6 @@ func (r *Room) GetParticipantList() string {
 func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger) {
 	defer func() {
 		r.RemoveParticipant(p, logger)
-
 		logger.Info().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("connection closed, participant removed")
 	}()
 
@@ -444,7 +443,6 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 
 					p.Room.SendBack(p.ID, errMsg, logger)
 					continue
-
 				}
 				responseTrackMetaData := r.GetTracks(logger)
 				for i, track := range responseTrackMetaData {
@@ -463,7 +461,6 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 
 				p.Room.SendBack(p.ID, responseMsg, logger)
 				logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("sdp answer send to the user")
-				//p.Room.SignalPeerConnections(logger)
 			} else if sdp.Type == webrtc.SDPTypeAnswer {
 				if err := p.rtcConn.HandleSDPAnswer(sdp); err != nil {
 					logger.Error().Str("room_id", r.ID).Str("participant_id", p.ID).Err(err).Msg("unable to handle sdp answer")
@@ -507,11 +504,24 @@ func (p *Participant) ReadPump(r *Room, rm *RoomManager, logger *zerolog.Logger)
 			}
 
 		case "join":
+			var roomState []core.RoomState
+			for _, p := range r.Participants {
+				if p.Role != "audience" {
+					roomState = append(roomState, core.RoomState{
+						ParticipantID:   p.ID,
+						ParticipantName: p.Name,
+						Role:            p.Role,
+						Status:          p.Status,
+					})
+				}
+			}
 			joiningAck := core.Message{
 				Type:    "join_ack",
 				To:      p.ID,
+				State:   roomState,
 				Content: fmt.Sprintf(`{"room_id":"%s","participant_id":"%s","participant_name":"%s","participant_role":"%s"}`, r.ID, p.ID, p.Name, p.Role),
 			}
+
 			p.Room.SendBack(p.ID, joiningAck, logger)
 			r.Broadcast(p.ID, msg, logger)
 			logger.Debug().Str("room_id", r.ID).Str("participant_id", p.ID).Msg("joining message broadcasted")

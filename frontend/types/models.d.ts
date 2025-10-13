@@ -13,11 +13,13 @@ export interface Room {
   audienceURL: string | null;
 }
 
+
+
 export type Role = "host" | "guest" | "audience";
 export type ConnectionStatus = "connecting" | "connected" | "disconnected";
 
 export interface Participant extends User {
   role: Role;
   status: ConnectionStatus;
-  wsURL: string;
+  wsURL?: string;
 }

@@ -1,16 +1,22 @@
+import { User } from "@/types/models";
+
+
 export interface IncomingStream {
   peerId: string;
   stream: MediaStream;
-  type: "camera" | "screen";
+  type: "camera" | "mic" | "screen";
 }
+
 
 export class PeerConnectionManager {
   private peerConnection?: RTCPeerConnection;
   private localStream?: MediaStream;
   private onIncomingStream?: (stream: IncomingStream) => void;
   private queuedIceCandidates: RTCIceCandidate[] = [];
+  private user: User
 
-  constructor() {
+  constructor(user: User) {
+    this.user = user
     this.createPeerConnection();
   }
 
@@ -25,16 +31,27 @@ export class PeerConnectionManager {
     });
 
     this.peerConnection.ontrack = (event) => {
-        console.log("trackID",event.track.id)
-        console.log("New remote track:", event.track.kind);
-      if (this.onIncomingStream) {
-        const incomingStream: IncomingStream = {
-          peerId: "remote-peer",
-          stream: event.streams[0],
-          type: "camera",
-        };
-        this.onIncomingStream(incomingStream);
-      }
+      const streams = event.streams;
+    
+      streams.forEach((stream) => {
+    
+        const [peerId, type] = stream.id.split("_");
+    
+        stream.getTracks().forEach((t) => {
+
+    
+          const incomingStream: IncomingStream = {
+            peerId,            
+            stream,            
+            type: (type as "camera" | "mic" | "screen") || (t.kind as "camera" | "mic") , 
+          };
+    
+          if (this.onIncomingStream) {
+            this.onIncomingStream(incomingStream);
+          }
+    
+        });
+      });
     };
 
     this.peerConnection.onicecandidate = (event) => {
@@ -48,6 +65,12 @@ export class PeerConnectionManager {
     this.localStream = await navigator.mediaDevices.getUserMedia({
       video: true,
       audio: true,
+    });
+
+    Object.defineProperty(this.localStream, "id",{value: `${this.user.id}-camera`})
+
+    this.localStream.getTracks().forEach(track => {
+      Object.defineProperty(track, "id", {value: 'cameraTrack'})
     });
 
     if (!this.peerConnection) this.createPeerConnection();
@@ -66,8 +89,15 @@ export class PeerConnectionManager {
   async createOffer(): Promise<RTCSessionDescriptionInit> {
     if (!this.peerConnection) this.createPeerConnection();
     const offer = await this.peerConnection!.createOffer();
-    await this.peerConnection!.setLocalDescription(offer);
-    return offer;
+
+    let customizeSDP = offer.sdp
+
+    customizeSDP = customizeSDP!
+    .replace(/(m=audio[\s\S]*?a=msid:)([^\s]+) ([^\s]+)\r?\n/, `$1${this.user.id}_mic micTrack\n`)
+    .replace(/(m=video[\s\S]*?a=msid:)([^\s]+) ([^\s]+)\r?\n/, `$1${this.user.id}_camera cameraTrack\n`);
+
+    await this.peerConnection!.setLocalDescription({type: offer.type, sdp: customizeSDP});
+    return {type: offer.type, sdp: customizeSDP};
   }
 
   async createAnswer(offer: RTCSessionDescriptionInit): Promise<RTCSessionDescriptionInit> {
